@@ -1,0 +1,216 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>Flappy</title>
+    <script src="phaser.min.js"></script>
+  </head>
+  <body>
+
+  <script type="text/javascript">
+
+    (function() {
+      'use strict';
+
+      // thanks: http://www.html5gamedevs.com/topic/2701-drop-in-replacement-for-cameraupdatefollow-to-allow-leading/
+      Phaser.Camera.prototype.updateTarget = function () {
+        this.lead = this.lead || new Phaser.Point(0, 0);
+        var velocityObject = this.target.body || this.target;
+        this.newOffset = this.newOffset || new Phaser.Point(0, 0);
+        this.newOffset.setTo(
+            Phaser.Math.clamp(velocityObject.velocity.x, -this.lead.x, this.lead.x),
+            Phaser.Math.clamp(velocityObject.velocity.y, -this.lead.y, this.lead.y)
+        );
+        this.targetOffset = this.targetOffset || new Phaser.Point(this.newOffset.x, this.newOffset.y);
+        // This bit uses a nice exponential smoothing.
+        // The 0.2 is a half-life of the smoothing, in seconds
+        var smoothing = Math.pow(0.2, this.game.time.physicsElapsed);
+        this.targetOffset.setTo(
+            this.targetOffset.x * smoothing + this.newOffset.x * (1-smoothing),
+            this.targetOffset.y * smoothing + this.newOffset.y * (1-smoothing)
+        );
+        this.followPoint = this.followPoint || new Phaser.Point(0, 0);
+        this.followPoint.setTo(
+            Math.round(this.target.x + this.targetOffset.x),
+            Math.round(this.target.y + this.targetOffset.y)
+        );
+        if (this.deadzone) {
+           this._edge = this.followPoint.x - this.deadzone.x;
+           if (this.view.x > this._edge) {
+               this.view.x = this._edge;
+           }
+           this._edge = this.followPoint.x + this.target.width - this.deadzone.x - this.deadzone.width;
+           if (this.view.x < this._edge) {
+               this.view.x = this._edge;
+           }
+           this._edge = this.followPoint.y - this.deadzone.y;
+           if (this.view.y > this._edge) {
+               this.view.y = this._edge;
+           }
+           this._edge = this.followPoint.y + this.target.height - this.deadzone.y - this.deadzone.height;
+           if (this.view.y < this._edge) {
+               this.view.y = this._edge;
+           }
+        }
+        else {
+           this.focusOnXY(this.followPoint.x, this.followPoint.y);
+        }
+      };
+
+
+      // ----------------------------
+
+      var screen_w = navigator.isCocoonJS ? window.innerWidth : 144,
+          screen_h = navigator.isCocoonJS ? window.innerHeight : 255,
+          game, cursors, player, 
+          grounds = [ ],
+          background,
+          hardsurface,
+          pipesStart = false,
+          pipes = [ ]
+          ;
+
+      window.onload = function() {
+        game = new Phaser.Game(screen_w, screen_h, Phaser.CANVAS, '', { preload: preload, create: create, update: update });
+
+        function preload() {
+          game.load.image('bg', 'assets/bg.png');
+          game.load.image('ground', 'assets/ground.png');
+          game.load.image('pipe-up', 'assets/pipe-up.png');
+          game.load.image('pipe-down', 'assets/pipe-down.png');
+          game.load.spritesheet('bird', 'assets/bird.png', 17, 12);
+        }
+
+        // thanks: auto scaling: http://www.html5gamedevs.com/topic/2273-phaser-cocoonjs-vs-webgl-scaling-finally-solved/
+        function getRatio(type, w, h) {
+          var scaleX = screen_w / w, scaleY = screen_h / h, result = { x: 1, y: 1 };
+          switch (type) {
+            case 'all':
+                result.x = scaleX > scaleY ? scaleY : scaleX;
+                result.y = scaleX > scaleY ? scaleY : scaleX;
+                break;
+            case 'fit':
+                result.x = scaleX > scaleY ? scaleX : scaleY;
+                result.y = scaleX > scaleY ? scaleX : scaleY;
+                break;
+            case 'fill':
+                result.x = scaleX;
+                result.y = scaleY;
+                break;
+          }
+          return result;
+        }
+
+        function create() {
+          cursors = game.input.keyboard.createCursorKeys();
+          game.world.setBounds(0, 0, 1440, 255);
+
+          var ratio = getRatio('fit', 144, 255);
+
+          game.stage.scaleMode = Phaser.StageScaleMode.SHOW_ALL;
+          game.stage.scale.minWidth = 144;
+          game.stage.scale.minHeight = 255;
+          game.stage.scale.pageAlignHorizontally = true;
+          game.stage.scale.setScreenSize(true);
+          //Phaser.Canvas.setSmoothingEnabled(game.context, false);
+
+          //background = game.add.sprite(0, 0, 'bg');
+          //game.add.sprite(144, 0, 'bg');
+          //game.add.sprite(288, 0, 'bg');
+
+          //game.add.sprite(288, 0, 'bg');
+
+          hardsurface = game.add.group();
+          {
+            grounds.push(hardsurface.create(0, game.world.height-40, 'ground'));
+            grounds.push(hardsurface.create(144, game.world.height-40, 'ground'));
+            grounds.push(hardsurface.create(288, game.world.height-40, 'ground'));
+            grounds[0].body.immovable = true;
+            grounds[1].body.immovable = true;
+            grounds[2].body.immovable = true;
+          }
+
+          player = game.add.sprite(40, game.world.height - 140, 'bird');
+          player.animations.add('flapping', [0, 1, 2, 3], 10, true);
+
+          player.animations.play('flapping');
+          game.camera.follow(player, Phaser.Camera.FOLLOW_TIGHT);
+          player.body.velocity.x = 60;
+          player.body.gravity.y = 10;
+          player.body.bounce.y = 0;
+          player.body.collideWorldBounds = true;
+  
+          player.extra = { y: player.y };
+
+          //game.camera.deadzone = new Phaser.Rectangle( game.width / 4, 0, game.width / 2, game.height);
+          game.camera.deadzone = new Phaser.Rectangle( 40, 0, game.width / 2, game.height);
+          game.camera.lead = new Phaser.Point(game.width * 3/4, 0);
+
+          //hardsurface.create(288, 0, 'pipe-down');
+        }
+
+        function update() {
+          scrollGround();
+          game.physics.collide(player, hardsurface);
+          handleFlapping();
+        }
+
+        function scrollGround() {
+          var gh = grounds[0];
+          if (game.camera.x >= gh.x+gh.width) {
+            var gl = grounds[grounds.length-1]; // move to last
+            var g = grounds.shift();
+            g.reset(gl.x+gl.width, g.y);
+            grounds.push(g);
+            game.world.setBounds(0, 0, game.world.width+144, 255);
+
+            // hack, we don't time things yet, rely on camera coords to start showing pipes ...
+            if (game.camera.x >= 288) { pipesStart = true }
+
+            if (pipes.length >= 3) {
+              var ps = pipes.shift();
+              ps[0].destroy();
+              ps[1].destroy();
+              ps[2].destroy();
+              ps[3].destroy();
+            }
+            if (pipesStart) { 
+              var p1 = hardsurface.create(g.x, -40, 'pipe-down');
+              var p2 = hardsurface.create(g.x, p1.height + 13, 'pipe-up');
+              var p3 = hardsurface.create(g.x + 74, -40, 'pipe-down');
+              var p4 = hardsurface.create(g.x + 74, p1.height + 13, 'pipe-up');
+              p1.body.immovable = true;
+              p2.body.immovable = true;
+              p3.body.immovable = true;
+              p4.body.immovable = true;
+              pipes.push( [ p1, p2, p3, p4 ] );
+            }
+          }
+        }
+
+        function handleFlapping() {
+          if (player.y > player.extra.tapY) {
+            player.angle = 0;
+          }
+          var doFlap = false;
+          if (cursors.up.isDown) { doFlap = true; }
+          if (game.input.activePointer.isDown) { doFlap = true; } 
+          
+          if (doFlap) { 
+            player.extra.tapY = player.y;
+            player.body.velocity.y = -140;
+            player.angle = 345;
+          }
+        }
+
+          
+
+
+      };
+
+    })();
+
+  </script>
+
+  </body>
+</html>
